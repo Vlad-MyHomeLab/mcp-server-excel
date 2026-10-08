@@ -8,8 +8,10 @@ namespace Sbroenne.ExcelMcp.McpServer.Infrastructure;
 public static class McpServerVersionChecker
 {
 #if NO_TELEMETRY
+#pragma warning disable IDE0060
     public static Task<string?> CheckForUpdateAsync(CancellationToken cancellationToken = default) =>
         Task.FromResult<string?>(null);
+#pragma warning restore IDE0060
 #else
     /// <summary>
     /// Checks for updates and returns the latest version if an update is available.
@@ -47,10 +49,12 @@ public static class McpServerVersionChecker
         return informational?.Split('+')[0] ?? assembly.GetName().Version?.ToString() ?? "0.0.0";
     }
 
+#if !NO_TELEMETRY
     private static int CompareVersions(string current, string latest)
     {
         if (Version.TryParse(current, out var currentVer) && Version.TryParse(latest, out var latestVer))
             return currentVer.CompareTo(latestVer);
         return string.Compare(current, latest, StringComparison.Ordinal);
     }
+#endif
 }
