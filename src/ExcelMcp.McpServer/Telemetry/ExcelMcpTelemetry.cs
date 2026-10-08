@@ -1,3 +1,20 @@
+#if NO_TELEMETRY
+namespace Sbroenne.ExcelMcp.McpServer.Telemetry;
+
+/// <summary>
+/// No-op telemetry callback used by the no-telemetry MCP build.
+/// </summary>
+public static class ExcelMcpTelemetry
+{
+    internal static void TrackToolInvocation(
+        string toolName,
+        string action,
+        long durationMs,
+        ToolInvocationResult result)
+    {
+    }
+}
+#else
 // Copyright (c) Sbroenne. All rights reserved.
 // Licensed under the MIT License.
 
@@ -401,3 +418,5 @@ public static class ExcelMcpTelemetry
         telemetry.Context.Component.Version = GetVersion();
     }
 }
+
+#endif

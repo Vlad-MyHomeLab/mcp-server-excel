@@ -7,6 +7,10 @@ namespace Sbroenne.ExcelMcp.McpServer.Infrastructure;
 /// </summary>
 public static class McpServerVersionChecker
 {
+#if NO_TELEMETRY
+    public static Task<string?> CheckForUpdateAsync(CancellationToken cancellationToken = default) =>
+        Task.FromResult<string?>(null);
+#else
     /// <summary>
     /// Checks for updates and returns the latest version if an update is available.
     /// </summary>
@@ -30,6 +34,7 @@ public static class McpServerVersionChecker
             return null;
         }
     }
+#endif
 
     /// <summary>
     /// Gets the current version of the MCP Server.

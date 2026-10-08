@@ -22,30 +22,57 @@ jobs:
         with:
           global-json-file: global.json
 
-      - name: Publish and verify telemetry configuration
+      - name: Publish and verify no-telemetry artifact
         shell: pwsh
         run: |
           $ErrorActionPreference = 'Stop'
-          Remove-Item Env:\APPINSIGHTS_CONNECTION_STRING -ErrorAction SilentlyContinue
-          Remove-Item Env:\AppInsightsConnectionString -ErrorAction SilentlyContinue
-          if (Test-Path Env:\APPINSIGHTS_CONNECTION_STRING) { throw 'APPINSIGHTS_CONNECTION_STRING must be unset.' }
-          if (Test-Path Env:\AppInsightsConnectionString) { throw 'AppInsightsConnectionString environment variable must be unset.' }
 
           dotnet --version
-          dotnet publish src/ExcelMcp.McpServer/ExcelMcp.McpServer.csproj -c Release -r win-x64 --self-contained true -p:PublishSingleFile=true -p:IncludeNativeLibrariesForSelfExtract=true -p:PublishTrimmed=false -p:PublishReadyToRun=false '-p:AppInsightsConnectionString=' -o artifacts/no-telemetry/publish --verbosity minimal
+          dotnet publish src/ExcelMcp.McpServer/ExcelMcp.McpServer.csproj -c Release -r win-x64 --self-contained true -p:PublishSingleFile=true -p:IncludeNativeLibrariesForSelfExtract=true -p:PublishTrimmed=false -p:PublishReadyToRun=false -p:NoTelemetry=true -o artifacts/no-telemetry/publish --verbosity minimal
           if ($LASTEXITCODE -ne 0) { throw "dotnet publish failed with exit code $LASTEXITCODE." }
 
-          $telemetryConfigs = @(Get-ChildItem src/ExcelMcp.McpServer/obj -Filter TelemetryConfig.g.cs -File -Recurse)
-          if ($telemetryConfigs.Count -eq 0) { throw 'Build did not generate TelemetryConfig.g.cs.' }
-          foreach ($config in $telemetryConfigs) {
-            $content = [IO.File]::ReadAllText($config.FullName)
-            if ($content -notmatch 'ConnectionString\s*=\s*""\s*;') {
-              throw "TelemetryConfig.g.cs does not have an empty ConnectionString: $($config.FullName)"
-            }
+          $assetsPath = 'src/ExcelMcp.McpServer/obj/project.assets.json'
+          if (-not (Test-Path -LiteralPath $assetsPath -PathType Leaf)) { throw "Restore assets missing: $assetsPath" }
+          $assets = Get-Content -LiteralPath $assetsPath -Raw | ConvertFrom-Json
+          $dependencyNames = @($assets.libraries.PSObject.Properties.Name)
+          $applicationInsightsPackages = @($dependencyNames | Where-Object { $_ -match '^Microsoft\.ApplicationInsights' })
+          if ($applicationInsightsPackages.Count -ne 0) {
+            throw "Application Insights packages remain in the no-telemetry dependency graph: $($applicationInsightsPackages -join ', ')"
           }
+          $telemetryConfigs = @(Get-ChildItem src/ExcelMcp.McpServer/obj -Filter TelemetryConfig.g.cs -File -Recurse -ErrorAction SilentlyContinue)
+          if ($telemetryConfigs.Count -ne 0) { throw 'No-telemetry build unexpectedly generated TelemetryConfig.g.cs.' }
 
           $publishedExe = 'artifacts/no-telemetry/publish/Sbroenne.ExcelMcp.McpServer.exe'
           if (-not (Test-Path -LiteralPath $publishedExe -PathType Leaf)) { throw "Published apphost missing: $publishedExe" }
+          $publishedText = [Text.Encoding]::ASCII.GetString([IO.File]::ReadAllBytes($publishedExe))
+          if ($publishedText.Contains('Microsoft.ApplicationInsights')) { throw 'Published executable contains an Application Insights SDK assembly or symbol.' }
+          if ($publishedText.Contains('api.github.com/repos/sbroenne/mcp-server-excel/releases/latest')) { throw 'Published executable contains the GitHub version-check endpoint.' }
+
+          $proxyListener = [Net.Sockets.TcpListener]::new([Net.IPAddress]::Loopback, 0)
+          $proxyListener.Start()
+          $proxyPort = ([Net.IPEndPoint]$proxyListener.LocalEndpoint).Port
+          $proxyNames = @('HTTP_PROXY', 'HTTPS_PROXY', 'ALL_PROXY', 'NO_PROXY')
+          $previousProxyValues = @{}
+          foreach ($proxyName in $proxyNames) { $previousProxyValues[$proxyName] = [Environment]::GetEnvironmentVariable($proxyName, 'Process') }
+          try {
+            $localProxy = "http://127.0.0.1:$proxyPort"
+            $env:HTTP_PROXY = $localProxy
+            $env:HTTPS_PROXY = $localProxy
+            $env:ALL_PROXY = $localProxy
+            $env:NO_PROXY = ''
+            $versionOutput = & $publishedExe --version 2>&1
+            $versionExitCode = $LASTEXITCODE
+            $versionText = $versionOutput -join "`n"
+            if ($versionExitCode -ne 0) { throw "--version exited with code $versionExitCode. Output: $versionText" }
+            if ($versionText -notmatch '(?m)^Excel MCP Server v\d+\.\d+') { throw "--version did not print the current server version. Output: $versionText" }
+            if ($versionText -match 'Update available:') { throw "--version unexpectedly printed update information. Output: $versionText" }
+            Start-Sleep -Milliseconds 200
+            if ($proxyListener.Pending()) { throw '--version attempted an outbound request through the local proxy.' }
+          }
+          finally {
+            foreach ($proxyName in $proxyNames) { [Environment]::SetEnvironmentVariable($proxyName, $previousProxyValues[$proxyName], 'Process') }
+            $proxyListener.Stop()
+          }
 
           $packageDir = 'artifacts/no-telemetry/package'
           New-Item -ItemType Directory -Force -Path $packageDir | Out-Null

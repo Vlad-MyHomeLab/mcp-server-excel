@@ -14,6 +14,10 @@
     <!-- MCP Server doesn't need XML documentation warnings - API docs are in MCP schema -->
     <NoWarn>$(NoWarn);CS1591</NoWarn>
 
+    <!-- The opt-in no-telemetry publish excludes the Application Insights SDK and
+         compiles out its startup and version-check paths. -->
+    <DefineConstants Condition="'$(NoTelemetry)' == 'true'">$(DefineConstants);NO_TELEMETRY</DefineConstants>
+
     <!-- Emit source generator output to disk for debugging -->
     <EmitCompilerGeneratedFiles>true</EmitCompilerGeneratedFiles>
 
@@ -48,7 +52,7 @@
 
     <!-- Application Insights Connection String - embedded at build time from environment variable -->
     <!-- CI/CD sets APPINSIGHTS_CONNECTION_STRING before build; local dev builds get empty string (telemetry disabled) -->
-    <AppInsightsConnectionString Condition="'$(AppInsightsConnectionString)' == ''">$(APPINSIGHTS_CONNECTION_STRING)</AppInsightsConnectionString>
+    <AppInsightsConnectionString Condition="'$(NoTelemetry)' != 'true' and '$(AppInsightsConnectionString)' == ''">$(APPINSIGHTS_CONNECTION_STRING)</AppInsightsConnectionString>
   </PropertyGroup>
 
   <!-- Workaround: .NET SDK unconditionally sets PackageType=DotnetTool when PackAsTool=true,
@@ -88,7 +92,7 @@
     </Task>
   </UsingTask>
 
-  <Target Name="GenerateTelemetryConfig" BeforeTargets="BeforeCompile;CoreCompile">
+  <Target Name="GenerateTelemetryConfig" BeforeTargets="BeforeCompile;CoreCompile" Condition="'$(NoTelemetry)' != 'true'">
     <PropertyGroup>
       <TelemetryConfigFile>$(IntermediateOutputPath)TelemetryConfig.g.cs</TelemetryConfigFile>
       <TelemetryConfigContent>// Auto-generated at build time - do not edit
@@ -105,6 +109,10 @@ internal static class TelemetryConfig
       <Compile Include="$(TelemetryConfigFile)" />
     </ItemGroup>
   </Target>
+
+  <ItemGroup Condition="'$(NoTelemetry)' == 'true'">
+    <Compile Remove="Infrastructure\NuGetVersionChecker.cs" />
+  </ItemGroup>
 
   <!-- Release Build Optimizations -->
   <PropertyGroup Condition="'$(Configuration)' == 'Release'">
@@ -161,9 +169,9 @@ internal static class TelemetryConfig
     <PackageReference Include="ModelContextProtocol" />
     <PackageReference Include="Microsoft.Extensions.Hosting" />
     <PackageReference Include="Microsoft.Extensions.Logging" />
-    <!-- Application Insights Worker Service SDK for telemetry (Users, Sessions, Funnels, User Flows) -->
-    <!-- Worker Service SDK provides proper DI integration, auto-collection modules, and host lifetime awareness -->
-    <PackageReference Include="Microsoft.ApplicationInsights.WorkerService" />
+    <!-- Application Insights is retained in standard builds and omitted entirely by the
+         opt-in no-telemetry distribution. -->
+    <PackageReference Include="Microsoft.ApplicationInsights.WorkerService" Condition="'$(NoTelemetry)' != 'true'" />
     <PackageReference Include="Microsoft.CodeAnalysis.NetAnalyzers">
       <PrivateAssets>all</PrivateAssets>
       <IncludeAssets>runtime; build; native; contentfiles; analyzers</IncludeAssets>

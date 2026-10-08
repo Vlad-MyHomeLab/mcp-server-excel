@@ -1,14 +1,18 @@
 using System.IO.Pipelines;
 using System.Runtime.InteropServices;
+#if !NO_TELEMETRY
 using Microsoft.ApplicationInsights;
 using Microsoft.ApplicationInsights.WorkerService;
+using OpenTelemetry.Metrics;
+#endif
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Console;
-using OpenTelemetry.Metrics;
+#if !NO_TELEMETRY
 using Sbroenne.ExcelMcp.McpServer.Telemetry;
+#endif
 
 namespace Sbroenne.ExcelMcp.McpServer;
 
@@ -18,7 +22,9 @@ namespace Sbroenne.ExcelMcp.McpServer;
 /// </summary>
 public class Program
 {
+#if !NO_TELEMETRY
     private static int _globalExceptionHandlersRegistered;
+#endif
     public static Task<int> Main(string[] args) => RunAsync(args);
 
     internal static async Task<int> RunAsync(
@@ -44,8 +50,10 @@ public class Program
             }
         }
 
+#if !NO_TELEMETRY
         // Register global exception handlers for unhandled exceptions (telemetry)
         RegisterGlobalExceptionHandlers();
+#endif
 
         var builder = Host.CreateApplicationBuilder(args);
 
@@ -63,8 +71,10 @@ public class Program
             .AddEnvironmentVariables()
             .AddCommandLine(args);
 
+#if !NO_TELEMETRY
         // Configure Application Insights
         ConfigureTelemetry(builder);
+#endif
 
         // Application Insights registers an ILogger provider that can forward framework
         // messages containing host paths or client names. Configure console logging last
@@ -134,8 +144,10 @@ public class Program
 
         var host = builder.Build();
 
+#if !NO_TELEMETRY
         // Initialize telemetry client for static access
         InitializeTelemetryClient(host.Services);
+#endif
 
         // Note: Update checks are handled by ExcelMCP Service (shown via Windows notification)
         // to avoid duplicate notifications when running in unified package mode
@@ -156,11 +168,17 @@ public class Program
             return 0;
         }
 #pragma warning disable CA1031 // Catch general exception - this is a top-level handler that must not crash
+#if NO_TELEMETRY
+        catch (Exception)
+#else
         catch (Exception ex)
+#endif
         {
             // Track MCP SDK/transport errors (protocol errors, serialization errors, etc.)
+#if !NO_TELEMETRY
             ExcelMcpTelemetry.TrackUnhandledException(ex, "McpServer.RunAsync");
             ExcelMcpTelemetry.Flush(); // Ensure telemetry is sent before exit
+#endif
 
             // Return exit code 1 for fatal errors (FR-024, SC-015a)
             // Do NOT re-throw - deterministic exit code is more important for callers
@@ -185,9 +203,12 @@ public class Program
         });
         logging.AddConsoleFormatter<StdioConsoleFormatter, ConsoleFormatterOptions>();
         logging.SetMinimumLevel(LogLevel.Warning);
+#if !NO_TELEMETRY
         logging.AddFilter<ConsoleLoggerProvider>("Microsoft.ApplicationInsights", LogLevel.Warning);
+#endif
     }
 
+#if !NO_TELEMETRY
     /// <summary>
     /// Initializes the static TelemetryClient from DI container.
     /// </summary>
@@ -288,6 +309,9 @@ public class Program
         }
     }
 
+#endif
+
+#if !NO_TELEMETRY
     /// <summary>
     /// Registers global exception handlers to capture unhandled exceptions.
     /// </summary>
@@ -314,6 +338,8 @@ public class Program
             // Don't observe it - let the runtime handle it
         };
     }
+
+#endif
 
     /// <summary>
     /// Shows help information.
@@ -361,6 +387,17 @@ public class Program
             """;
     }
 
+#if NO_TELEMETRY
+    /// <summary>
+    /// Shows the current version without contacting external services.
+    /// </summary>
+    private static Task ShowVersionAsync()
+    {
+        var currentVersion = Infrastructure.McpServerVersionChecker.GetCurrentVersion();
+        Console.WriteLine($"Excel MCP Server v{currentVersion}");
+        return Task.CompletedTask;
+    }
+#else
     /// <summary>
     /// Shows version information and checks for updates.
     /// </summary>
@@ -378,6 +415,7 @@ public class Program
             Console.WriteLine("Download: https://github.com/sbroenne/mcp-server-excel/releases/latest");
         }
     }
+#endif
 }
 
 /// <summary>
