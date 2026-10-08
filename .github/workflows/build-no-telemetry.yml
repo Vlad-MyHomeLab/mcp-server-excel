@@ -1,0 +1,74 @@
+name: Build no-telemetry Windows MCP
+
+on:
+  push:
+    branches: [no-telemetry]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: Build win-x64 self-contained MCP
+    runs-on: windows-latest
+    timeout-minutes: 30
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+
+      - name: Setup .NET SDK
+        uses: actions/setup-dotnet@a98b56852c35b8e3190ac28c8c2271da59106c68 # v6
+        with:
+          global-json-file: global.json
+
+      - name: Publish and verify telemetry configuration
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          Remove-Item Env:\APPINSIGHTS_CONNECTION_STRING -ErrorAction SilentlyContinue
+          Remove-Item Env:\AppInsightsConnectionString -ErrorAction SilentlyContinue
+          if (Test-Path Env:\APPINSIGHTS_CONNECTION_STRING) { throw 'APPINSIGHTS_CONNECTION_STRING must be unset.' }
+          if (Test-Path Env:\AppInsightsConnectionString) { throw 'AppInsightsConnectionString environment variable must be unset.' }
+
+          dotnet --version
+          dotnet publish src/ExcelMcp.McpServer/ExcelMcp.McpServer.csproj -c Release -r win-x64 --self-contained true -p:PublishSingleFile=true -p:IncludeNativeLibrariesForSelfExtract=true -p:PublishTrimmed=false -p:PublishReadyToRun=false '-p:AppInsightsConnectionString=' -o artifacts/no-telemetry/publish --verbosity minimal
+          if ($LASTEXITCODE -ne 0) { throw "dotnet publish failed with exit code $LASTEXITCODE." }
+
+          $telemetryConfigs = @(Get-ChildItem src/ExcelMcp.McpServer/obj -Filter TelemetryConfig.g.cs -File -Recurse)
+          if ($telemetryConfigs.Count -eq 0) { throw 'Build did not generate TelemetryConfig.g.cs.' }
+          foreach ($config in $telemetryConfigs) {
+            $content = [IO.File]::ReadAllText($config.FullName)
+            if ($content -notmatch 'ConnectionString\s*=\s*""\s*;') {
+              throw "TelemetryConfig.g.cs does not have an empty ConnectionString: $($config.FullName)"
+            }
+          }
+
+          $publishedExe = 'artifacts/no-telemetry/publish/Sbroenne.ExcelMcp.McpServer.exe'
+          if (-not (Test-Path -LiteralPath $publishedExe -PathType Leaf)) { throw "Published apphost missing: $publishedExe" }
+
+          $packageDir = 'artifacts/no-telemetry/package'
+          New-Item -ItemType Directory -Force -Path $packageDir | Out-Null
+          Copy-Item -LiteralPath $publishedExe -Destination (Join-Path $packageDir 'mcp-excel.exe')
+          Copy-Item -LiteralPath 'src/ExcelMcp.McpServer/README.md' -Destination (Join-Path $packageDir 'README.md')
+          Copy-Item -LiteralPath 'LICENSE' -Destination (Join-Path $packageDir 'LICENSE')
+          $entries = @(Get-ChildItem -LiteralPath $packageDir -File | Select-Object -ExpandProperty Name | Sort-Object)
+          $expectedEntries = @('LICENSE', 'README.md', 'mcp-excel.exe')
+          if (Compare-Object $expectedEntries $entries) { throw "Unexpected package contents: $($entries -join ', ')" }
+
+          $zipName = 'mcp-excel-no-telemetry-win-x64.zip'
+          $zipPath = Join-Path 'artifacts/no-telemetry' $zipName
+          Compress-Archive -Path (Join-Path $packageDir '*') -DestinationPath $zipPath -CompressionLevel Optimal
+          if (-not (Test-Path -LiteralPath $zipPath -PathType Leaf)) { throw 'Package ZIP was not created.' }
+          $hash = (Get-FileHash -LiteralPath $zipPath -Algorithm SHA256).Hash.ToLowerInvariant()
+          Set-Content -LiteralPath "$zipPath.sha256" -Value "$hash  $zipName" -Encoding ascii
+          Add-Content -LiteralPath $env:GITHUB_STEP_SUMMARY -Value "ZIP SHA-256: $hash"
+
+      - name: Upload custom runtime artifact
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: excelmcp-no-telemetry-win-x64
+          path: |
+            artifacts/no-telemetry/mcp-excel-no-telemetry-win-x64.zip
+            artifacts/no-telemetry/mcp-excel-no-telemetry-win-x64.zip.sha256
+          if-no-files-found: error
