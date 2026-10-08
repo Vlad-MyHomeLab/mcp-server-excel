@@ -6,6 +6,7 @@ namespace Sbroenne.ExcelMcp.McpServer.Telemetry;
 /// </summary>
 public static class ExcelMcpTelemetry
 {
+#pragma warning disable IDE0060
     internal static void TrackToolInvocation(
         string toolName,
         string action,
@@ -14,6 +15,7 @@ public static class ExcelMcpTelemetry
     {
     }
 }
+#pragma warning restore IDE0060
 #else
 // Copyright (c) Sbroenne. All rights reserved.
 // Licensed under the MIT License.
